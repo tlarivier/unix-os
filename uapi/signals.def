@@ -1,0 +1,39 @@
+/*
+ * signals.def - X-macro definitions for all signals
+ * 
+ * Format: SIGNAL_X(name, number, default_action, description)
+ * 
+ * Actions: TERM=terminate, CORE=core dump, STOP=stop, CONT=continue, IGN=ignore
+ */
+
+SIGNAL_X(SIGHUP,     1,  TERM, "Hangup")
+SIGNAL_X(SIGINT,     2,  TERM, "Interrupt")
+SIGNAL_X(SIGQUIT,    3,  CORE, "Quit")
+SIGNAL_X(SIGILL,     4,  CORE, "Illegal instruction")
+SIGNAL_X(SIGTRAP,    5,  CORE, "Trace/breakpoint trap")
+SIGNAL_X(SIGABRT,    6,  CORE, "Aborted")
+SIGNAL_X(SIGBUS,     7,  CORE, "Bus error")
+SIGNAL_X(SIGFPE,     8,  CORE, "Floating point exception")
+SIGNAL_X(SIGKILL,    9,  TERM, "Killed")
+SIGNAL_X(SIGUSR1,   10,  TERM, "User defined signal 1")
+SIGNAL_X(SIGSEGV,   11,  CORE, "Segmentation fault")
+SIGNAL_X(SIGUSR2,   12,  TERM, "User defined signal 2")
+SIGNAL_X(SIGPIPE,   13,  TERM, "Broken pipe")
+SIGNAL_X(SIGALRM,   14,  TERM, "Alarm clock")
+SIGNAL_X(SIGTERM,   15,  TERM, "Terminated")
+SIGNAL_X(SIGSTKFLT, 16,  TERM, "Stack fault")
+SIGNAL_X(SIGCHLD,   17,  IGN,  "Child exited")
+SIGNAL_X(SIGCONT,   18,  CONT, "Continued")
+SIGNAL_X(SIGSTOP,   19,  STOP, "Stopped (signal)")
+SIGNAL_X(SIGTSTP,   20,  STOP, "Stopped")
+SIGNAL_X(SIGTTIN,   21,  STOP, "Stopped (tty input)")
+SIGNAL_X(SIGTTOU,   22,  STOP, "Stopped (tty output)")
+SIGNAL_X(SIGURG,    23,  IGN,  "Urgent I/O condition")
+SIGNAL_X(SIGXCPU,   24,  CORE, "CPU time limit exceeded")
+SIGNAL_X(SIGXFSZ,   25,  CORE, "File size limit exceeded")
+SIGNAL_X(SIGVTALRM, 26,  TERM, "Virtual timer expired")
+SIGNAL_X(SIGPROF,   27,  TERM, "Profiling timer expired")
+SIGNAL_X(SIGWINCH,  28,  IGN,  "Window changed")
+SIGNAL_X(SIGIO,     29,  TERM, "I/O possible")
+SIGNAL_X(SIGPWR,    30,  TERM, "Power failure")
+SIGNAL_X(SIGSYS,    31,  CORE, "Bad system call")

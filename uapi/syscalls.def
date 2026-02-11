@@ -1,0 +1,159 @@
+/*
+ * syscalls.def - X-macro definitions for all system calls
+ * 
+ * Format: SYSCALL_X(name, number, nargs)
+ * 
+ * Usage:
+ *   #define SYSCALL_X(name, nr, nargs) ...
+ *   #include "syscalls.def"
+ *   #undef SYSCALL_X
+ * 
+ * NOTE: Dynamic linking (dlopen/dlclose/dlsym) is handled in userspace
+ *       by ld.so - no kernel syscalls needed.
+ */
+
+/* Process management */
+SYSCALL_X(exit,         1,  1)
+SYSCALL_X(fork,         2,  0)
+SYSCALL_X(waitpid,      3,  3)
+SYSCALL_X(getpid,       4,  0)
+SYSCALL_X(getppid,      5,  0)
+SYSCALL_X(wait4,        6,  4)
+SYSCALL_X(execve,       7,  3)
+
+/* File I/O */
+SYSCALL_X(read,        10,  3)
+SYSCALL_X(write,       11,  3)
+SYSCALL_X(open,        12,  3)
+SYSCALL_X(close,       13,  1)
+SYSCALL_X(lseek,       14,  3)
+SYSCALL_X(dup,         15,  1)
+SYSCALL_X(dup2,        16,  2)
+SYSCALL_X(pipe,        17,  1)
+SYSCALL_X(pipe2,       18,  2)
+
+/* Filesystem */
+SYSCALL_X(stat,        20,  2)
+SYSCALL_X(fstat,       21,  2)
+SYSCALL_X(mkdir,       22,  2)
+SYSCALL_X(rmdir,       23,  1)
+SYSCALL_X(unlink,      24,  1)
+SYSCALL_X(rename,      25,  2)
+SYSCALL_X(chmod,       26,  2)
+SYSCALL_X(chown,       27,  3)
+SYSCALL_X(link,        28,  2)
+SYSCALL_X(symlink,     29,  2)
+
+/* Directory */
+SYSCALL_X(getdents,    30,  3)
+SYSCALL_X(chdir,       31,  1)
+SYSCALL_X(getcwd,      32,  2)
+
+/* Memory */
+SYSCALL_X(brk,         40,  1)
+SYSCALL_X(mmap,        41,  6)
+SYSCALL_X(munmap,      42,  2)
+SYSCALL_X(mprotect,    43,  3)
+
+/* Signals */
+SYSCALL_X(signal,      50,  2)
+SYSCALL_X(kill,        51,  2)
+SYSCALL_X(sigreturn,   52,  0)
+SYSCALL_X(sigaction,   53,  3)
+SYSCALL_X(ioctl,       54,  3)
+SYSCALL_X(fcntl,       55,  3)
+SYSCALL_X(sigprocmask, 56,  3)
+SYSCALL_X(sigsuspend,  57,  1)
+SYSCALL_X(sigpending,  58,  1)
+
+/* Time */
+SYSCALL_X(time,        60,  1)
+SYSCALL_X(nanosleep,   61,  2)
+SYSCALL_X(gettimeofday,62,  2)
+SYSCALL_X(clock_gettime,63, 2)
+SYSCALL_X(alarm,       64,  1)
+
+/* System info */
+SYSCALL_X(uname,       70,  1)
+SYSCALL_X(getuid,      71,  0)
+SYSCALL_X(getgid,      72,  0)
+SYSCALL_X(geteuid,     73,  0)
+SYSCALL_X(getegid,     74,  0)
+SYSCALL_X(setuid,      75,  1)
+SYSCALL_X(getrlimit,   76,  2)
+SYSCALL_X(setrlimit,   77,  2)
+SYSCALL_X(nice,        78,  1)
+SYSCALL_X(umask,       79,  1)
+SYSCALL_X(setgid,      80,  1)
+SYSCALL_X(seteuid,     81,  1)
+SYSCALL_X(setegid,     106, 1)
+
+/* I/O multiplexing */
+SYSCALL_X(select,      82,  5)
+SYSCALL_X(poll,        83,  3)
+
+/* Job control */
+SYSCALL_X(setpgid,     84,  2)
+SYSCALL_X(getpgid,     85,  1)
+SYSCALL_X(getpgrp,     86,  0)
+SYSCALL_X(setsid,      87,  0)
+SYSCALL_X(getsid,      88,  1)
+SYSCALL_X(tcgetpgrp,   89,  1)
+SYSCALL_X(tcsetpgrp,   90,  2)
+
+/* Terminal */
+SYSCALL_X(tcgetattr,   91,  2)
+SYSCALL_X(tcsetattr,   92,  3)
+SYSCALL_X(isatty,      93,  1)
+SYSCALL_X(ttyname,     94,  3)
+
+/* Additional FS */
+SYSCALL_X(fchmod,      95,  2)
+SYSCALL_X(fchown,      96,  3)
+SYSCALL_X(readlink,    99,  3)
+
+/* OS extensions */
+SYSCALL_X(reboot,     100,  1)
+SYSCALL_X(mount,      101,  5)
+SYSCALL_X(umount,     102,  1)
+SYSCALL_X(truncate,   103,  2)
+SYSCALL_X(ftruncate,  104,  2)
+SYSCALL_X(flock,      105,  2)
+
+/* Memory locking */
+SYSCALL_X(mlock,      150, 2)
+SYSCALL_X(munlock,    151, 2)
+
+/* System V IPC - Shared Memory */
+SYSCALL_X(shmget,     200, 3)
+SYSCALL_X(shmat,      201, 3)
+SYSCALL_X(shmdt,      202, 1)
+SYSCALL_X(shmctl,     203, 3)
+
+/* System V IPC - Semaphores */
+SYSCALL_X(semget,     204, 3)
+SYSCALL_X(semop,      205, 3)
+SYSCALL_X(semctl,     206, 4)
+
+/* Threading */
+SYSCALL_X(clone,      120, 5)
+SYSCALL_X(futex,      221, 5)
+SYSCALL_X(set_tid_address, 222, 1)
+SYSCALL_X(gettid,     223, 0)
+
+/* Sockets */
+SYSCALL_X(socket,     230, 3)
+SYSCALL_X(bind,       231, 3)
+SYSCALL_X(listen,     232, 2)
+SYSCALL_X(accept,     233, 3)
+SYSCALL_X(connect,    234, 3)
+SYSCALL_X(send,       235, 4)
+SYSCALL_X(recv,       236, 4)
+SYSCALL_X(shutdown,   237, 2)
+
+/* Debug / diagnostics */
+SYSCALL_X(debug,      240,  1)
+SYSCALL_X(procinfo,   241,  2)
+
+/* ABI version query */
+SYSCALL_X(abi_version, 254, 0)
