@@ -2,6 +2,12 @@
 
 Minimal Unix-like operating system for i686 (32-bit x86).
 
+## Demo
+
+https://github.com/tlarivier/unix-os/blob/main/docs/assets/demo.mp4
+
+> **Note**: If the video doesn't display, you can view it directly at `docs/assets/demo.mp4`
+
 ## Stats
 
 | Metric | Value |
