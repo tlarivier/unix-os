@@ -3,7 +3,4 @@
 
 #include <../uapi/resource.h>
 
-int sys_getrlimit(int resource, struct rlimit *rlim);
-int sys_setrlimit(int resource, const struct rlimit *rlim);
-
-#endif 
+#endif

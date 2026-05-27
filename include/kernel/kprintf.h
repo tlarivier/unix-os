@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-void kprintf(const char* format, ...);
-void itoa(uint32_t num, char* buffer, int base);
+void kprintf(const char *format, ...);
+void kprintf_enable_locking(void);
+void kprintf_panic(const char *msg);
 
-#endif 
+#endif

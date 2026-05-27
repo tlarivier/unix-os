@@ -1,14 +1,3 @@
-/*
- * errno.def - X-macro definitions for all errno values
- * 
- * Format: ERRNO_X(name, value, message)
- * 
- * Usage:
- *   #define ERRNO_X(name, val, msg) ...
- *   #include "errno.def"
- *   #undef ERRNO_X
- */
-
 /* Success */
 ERRNO_X(EOK,             0,   "Success")
 

@@ -1,9 +1,9 @@
 #ifndef KERNEL_TYPES_H
 #define KERNEL_TYPES_H
 
-#include <stdint.h>
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <../uapi/types.h>
 
@@ -26,4 +26,4 @@ typedef int32_t suseconds_t;
 typedef uint32_t paddr_t;
 typedef uint32_t vaddr_t;
 
-#endif 
+#endif

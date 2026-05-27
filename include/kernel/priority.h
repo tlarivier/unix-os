@@ -3,4 +3,4 @@
 
 int sys_nice(int increment);
 
-#endif 
+#endif

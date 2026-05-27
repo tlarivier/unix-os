@@ -1,261 +1,216 @@
-# UnixOS Kernel API Reference
+# UnixOS Syscall Reference
 
-## Driver Interfaces
+The kernel exposes 65 syscalls through INT 0x80, plus a small set of
+in-kernel driver interfaces consumed by `src/kernel/init/main.c`. This
+document covers the syscall surface only; per-file kernel contracts
+live as block-comment headers in each `.c`.
 
-### Timer (`kernel/timer.h`)
-```c
-void timer_init(uint32_t frequency);  // Initialize PIT
-void timer_handle_irq(void);          // Called from IRQ0
-uint32_t get_timer_ticks(void);       // Get tick count
-uint32_t get_seconds(void);           // Get seconds since boot
-void sleep_ms(uint32_t ms);           // Sleep milliseconds
+## ABI summary
+
+```
+INT 0x80
+EAX  = syscall number (uapi/syscalls.h __NR_*)
+EBX  = arg0   ECX = arg1   EDX = arg2
+ESI  = arg3   EDI = arg4
+EAX  = return value (negative = -errno)
 ```
 
-### Keyboard (`kernel/keyboard.h`)
-```c
-void keyboard_init(void);             // Initialize driver
-void keyboard_handle_irq(void);       // Called from IRQ1
-int kb_has_char(void);                // Check buffer
-char kb_get_char(void);               // Blocking read
-char kb_try_get_char(void);           // Non-blocking read
-```
+- Argument count: the dispatch table always passes five `uint32_t`s.
+  Unused slots are filled with garbage that the handler ignores.
+- Return type: `int32_t`. Negative values are POSIX errnos from
+  `uapi/errno.h`. `IS_ERROR(x)` checks the high bit.
+- User pointers: every pointer argument is opaque to the dispatcher.
+  Handlers validate with `copy_from_user` / `copy_to_user` from
+  `src/kernel/mm/uaccess.c`. Direct pointer dereference inside a syscall
+  is a bug.
+- Canary: `process_check_current_canary()` runs at syscall prologue
+  AND epilogue. A mismatch panics with a stack-smashing diagnostic.
 
-### VGA Text (`kernel/vga.h`)
-```c
-void vga_init(void);                  // Initialize VGA
-void vga_clear(void);                 // Clear screen
-void vga_putchar(char c);             // Print character
-void vga_print(const char *str);      // Print string
-void vga_print_at(const char *str, int x, int y, uint8_t attr);
-```
+## Process & identity
 
-### VGA Graphics (`kernel/vga_graphics.h`)
-```c
-int vga_set_mode_13h(void);           // Switch to 320x200x256
-void vga_set_text_mode(void);         // Switch to text mode
-void vga_putpixel(int x, int y, uint8_t color);
-void vga_fill_rect(int x, int y, int w, int h, uint8_t color);
-```
+| nr  | name           | signature                                | location           |
+|-----|----------------|------------------------------------------|--------------------|
+|   1 | exit           | `void(int status)`                       | sys_proc.c         |
+|   2 | fork           | `pid_t(void)` (via sys_fork_wrap)        | sys_proc.c, fork.c |
+|   3 | waitpid        | `pid_t(pid_t, int *status, int opts)`    | sys_proc.c         |
+|   4 | getpid         | `pid_t(void)`                            | sys_proc.c         |
+|   5 | getppid        | `pid_t(void)`                            | sys_proc.c         |
+|   7 | execve         | `int(const char *, char *const[], char *const[])` | sys_misc.c |
+|  50 | signal         | `sighandler_t(int sig, sighandler_t)`    | sys_proc.c         |
+|  51 | kill           | `int(pid_t, int sig)`                    | sys_proc.c         |
+| 222 | set_tid_address| `pid_t(int *)`  (stub)                   | sys_proc.c         |
+| 223 | gettid         | `pid_t(void)`  (= pid in single-thread)  | sys_proc.c         |
 
----
+## Credentials
 
-## Core Interfaces
+| nr  | name      | signature                | location    |
+|-----|-----------|--------------------------|-------------|
+|  71 | getuid    | `uid_t(void)`            | sys_proc.c  |
+|  72 | getgid    | `gid_t(void)`            | sys_proc.c  |
+|  73 | geteuid   | `uid_t(void)`            | sys_proc.c  |
+|  74 | getegid   | `gid_t(void)`            | sys_proc.c  |
+|  75 | setuid    | `int(uid_t)`             | sys_proc.c  |
+|  80 | setgid    | `int(gid_t)`             | sys_proc.c  |
+|  81 | seteuid   | `int(uid_t)`             | sys_proc.c  |
+| 106 | setegid   | `int(gid_t)`             | sys_proc.c  |
 
-### I/O Ports (`kernel/io.h`)
-```c
-static inline void outb(uint16_t port, uint8_t value);
-static inline uint8_t inb(uint16_t port);
-static inline void outw(uint16_t port, uint16_t value);
-static inline uint16_t inw(uint16_t port);
-static inline void outl(uint16_t port, uint32_t value);
-static inline uint32_t inl(uint16_t port);
-static inline void io_wait(void);
-```
+All credential edits go through `cred_set_*` in `src/kernel/core/cred.c`.
 
-### Printf (`kernel/kprintf.h`)
-```c
-void kprintf(const char *format, ...);  // %s %d %u %x %p %%
-void itoa(uint32_t num, char *buffer, int base);
-```
+## Job control
 
----
+| nr  | name        | signature                    |
+|-----|-------------|------------------------------|
+|  84 | setpgid     | `int(pid_t, pid_t)`          |
+|  85 | getpgid     | `pid_t(pid_t)`               |
+|  86 | getpgrp     | `pid_t(void)`                |
+|  87 | setsid      | `pid_t(void)`                |
+|  88 | getsid      | `pid_t(pid_t)`               |
+|  89 | tcgetpgrp   | `pid_t(int fd)`              |
+|  90 | tcsetpgrp   | `int(int fd, pid_t)`         |
+|  91 | tcgetattr   | `int(int fd, struct termios *)`|
+|  92 | tcsetattr   | `int(int fd, int actions, const struct termios *)`|
+|  93 | isatty      | `int(int fd)`                |
+|  94 | ttyname     | `int(int fd, char *buf, size_t len)`|
 
-## VFS Interface (`kernel/vfs.h`)
+Lives in `src/kernel/core/jobctl.c`; syscalls are thin facades in
+`sys_proc.c` and `sys_misc.c`.
 
-### File Operations
-```c
-int32_t vfs_open(const char *path, int flags, mode_t mode);
-void vfs_close(int fd);
-ssize_t vfs_read(int fd, void *buf, size_t count);
-ssize_t vfs_write(int fd, const void *buf, size_t count);
-off_t vfs_lseek(int fd, off_t offset, int whence);
-int vfs_stat(const char *path, struct stat *st);
-int vfs_fstat(int fd, struct stat *st);
-int vfs_dup(int oldfd);
-int vfs_dup2(int oldfd, int newfd);
-```
+## File descriptors
 
-### Directory Operations
-```c
-int32_t vfs_mkdir(const char *path, mode_t mode);
-ssize_t vfs_readdir_fd(int fd, void *buffer, size_t size);
-```
+| nr  | name       | signature                                  |
+|-----|------------|--------------------------------------------|
+|  10 | read       | `ssize_t(int fd, void *, size_t)`          |
+|  11 | write      | `ssize_t(int fd, const void *, size_t)`    |
+|  12 | open       | `int(const char *, int flags, mode_t)`     |
+|  13 | close      | `int(int fd)`                              |
+|  14 | lseek      | `off_t(int fd, off_t, int whence)`         |
+|  15 | dup        | `int(int fd)`                              |
+|  16 | dup2       | `int(int old, int new)`                    |
+|  17 | pipe       | `int(int pipefd[2])`                       |
+|  20 | stat       | `int(const char *, struct stat *)`         |
+|  21 | fstat      | `int(int fd, struct stat *)`               |
+|  30 | getdents   | `int(int fd, void *buf, unsigned count)`   |
 
----
+All wired in `src/kernel/syscalls/sys_fs.c`; back end in
+`src/kernel/fs/vfs_{core,fd}.c`.
 
-## Process Interface (`kernel/process.h`)
+## Path operations
 
-```c
-void process_init(void);
-process_t *process_create(const char *name, void *entry);
-void process_exit(int status);
-process_t *get_current_process(void);
-```
+| nr  | name      | signature                              |
+|-----|-----------|----------------------------------------|
+|  22 | mkdir     | `int(const char *, mode_t)`            |
+|  23 | rmdir     | `int(const char *)`                    |
+|  24 | unlink    | `int(const char *)`                    |
+|  25 | rename    | `int(const char *, const char *)`      |
+|  26 | chmod     | `int(const char *, mode_t)`            |
+|  27 | chown     | `int(const char *, uid_t, gid_t)`      |
+|  31 | chdir     | `int(const char *)`                    |
+|  32 | getcwd    | `int(char *buf, size_t)`               |
+| 103 | truncate  | `int(const char *, off_t)`             |
+| 104 | ftruncate | `int(int fd, off_t)`                   |
 
----
+`__NR_link` (28) is declared in the UAPI for libc's stub, but is
+intentionally not wired -- the dispatcher returns `-ENOSYS`.
 
-## Scheduler Interface (`kernel/scheduler.h`)
+## Memory
 
-```c
-void scheduler_init(void);
-void scheduler_enable(void);
-void scheduler_add_process(process_t *proc);
-void schedule(void);
-void yield(void);
-```
+| nr | name      | signature                                                  |
+|----|-----------|------------------------------------------------------------|
+| 40 | brk       | `void *(void *)`                                           |
+| 41 | mmap      | `void *(void *, size_t, int prot, int flags, int fd, off_t)`|
+| 42 | munmap    | `int(void *, size_t)`                                      |
+| 43 | mprotect  | `int(void *, size_t, int prot)`                            |
 
----
+`PROT_*` and `MAP_*` come from `uapi/mman.h` (single source of truth).
+`mmap` with `fd >= 0 && !(flags & MAP_ANON)` is lazy: pages are
+populated on fault by `src/kernel/mm/mmap_file.c::handle_demand_fault`.
 
-## Memory Interface (`kernel/memory.h`)
+The VGA framebuffer (`/dev/fb` or `MAP_FIXED` to `VGA_FRAMEBUFFER_ADDR`)
+is identity-mapped immediately at mmap time.
 
-```c
-void memory_init(void);
-void *kmalloc(size_t size);
-void kfree(void *ptr);
-void *krealloc(void *ptr, size_t size);
-```
+## Time
 
----
+| nr | name           | signature                                                |
+|----|----------------|----------------------------------------------------------|
+| 60 | time           | `time_t(time_t *)`                                       |
+| 61 | nanosleep      | `int(const struct timespec *, struct timespec *)`        |
+| 62 | gettimeofday   | `int(struct timeval *, void *tz)`                        |
+| 63 | clock_gettime  | `int(clockid_t, struct timespec *)`                      |
 
-## Adding New Drivers (Nouveau système)
+Backed by `src/kernel/drivers/timer/timer.c` (`time_now_*` /
+`time_sleep_timespec`). Epoch is set at boot from CMOS RTC.
 
-### Méthode 1: Via device.h abstraction
-```c
-#include <kernel/device.h>
+## Resource limits
 
-static struct device_ops my_ops = {
-    .init  = my_init,
-    .read  = my_read,
-    .write = my_write
-};
+| nr | name      | signature                                |
+|----|-----------|------------------------------------------|
+| 76 | getrlimit | `int(int resource, struct rlimit *)`     |
+| 77 | setrlimit | `int(int resource, const struct rlimit *)`|
+| 78 | nice      | `int(int inc)`                           |
 
-static struct device my_device = {
-    .name = "mydev",
-    .type = DEV_CHAR,
-    .ops  = &my_ops
-};
+`getrlimit/setrlimit/nice` go through ABI shims in `syscall_table.c`
+because their native prototype isn't `(u32 x5)`.
 
-// Dans init:
-device_register(&my_device);
-```
+## System & graphics
 
-### Méthode 2: Direct (legacy)
-1. Create header in `include/kernel/<driver>.h`
-2. Create source in `kernel/drivers/<category>/<driver>.c`
-3. Add to `KERNEL_DRIVER_SOURCES` in Makefile
-4. Add init call in `kernel/init/main.c`
+| nr  | name        | signature                          |
+|-----|-------------|------------------------------------|
+| 100 | reboot      | `int(int cmd)`                     |
+| 245 | gfx_mode    | `int(int mode)`                    |
+| 246 | gfx_palette | `int(uint32_t *, size_t, size_t)`  |
+| 247 | kb_event    | `int(struct kb_event *)`           |
 
-### Pour IRQ-based drivers:
-```c
-#include <kernel/irq.h>
+`gfx_*` and `kb_event` are Doom-side support primitives; backed by
+`src/kernel/drivers/video/vga_graphics.c` and
+`src/kernel/drivers/input/keyboard.c`.
 
-void my_irq_handler(uint32_t irq, void *data) {
-    // Handle interrupt
-}
+## Error codes
 
-// Dans init:
-irq_register(IRQ5, my_irq_handler, NULL, "mydriver");
-```
+`uapi/errno.h` exposes the standard POSIX set: EPERM, ENOENT, ESRCH,
+EINTR, EIO, ENXIO, E2BIG, ENOEXEC, EBADF, ECHILD, EAGAIN, ENOMEM,
+EACCES, EFAULT, ENOTBLK, EBUSY, EEXIST, EXDEV, ENODEV, ENOTDIR,
+EISDIR, EINVAL, ENFILE, EMFILE, ENOTTY, EFBIG, ENOSPC, ESPIPE, EROFS,
+EMLINK, EPIPE, ERANGE, ENAMETOOLONG, ENOSYS.
 
----
+## Internal driver interfaces
 
-## IPC Interface
+These are not user-facing syscalls; they document the in-kernel module
+seams that `init/main.c` calls during bring-up.
 
-### Pipes (`kernel/ipc/pipe.c`)
-```c
-int32_t sys_pipe(uint32_t pipefd[2]);  // Create pipe
-// Read/write via standard VFS operations
-```
-
-### System V Semaphores (`kernel/ipc/sem.c`)
-```c
-int32_t sys_semget(key_t key, int nsems, int semflg);
-int32_t sys_semop(int semid, struct sembuf *sops, size_t nsops);
-int32_t sys_semctl(int semid, int semnum, int cmd, ...);
-```
-
-### System V Shared Memory (`kernel/ipc/shm.c`)
-```c
-int32_t sys_shmget(key_t key, size_t size, int shmflg);
-void*   sys_shmat(int shmid, const void *shmaddr, int shmflg);
-int32_t sys_shmdt(const void *shmaddr);
-int32_t sys_shmctl(int shmid, int cmd, struct shmid_ds *buf);
-```
-
-### Futex (`kernel/ipc/futex.c`)
-```c
-int32_t sys_futex(uint32_t *uaddr, int op, uint32_t val,
-                  const struct timespec *timeout, uint32_t *uaddr2);
-// op: FUTEX_WAIT, FUTEX_WAKE
-// Supports timeout with -ETIMEDOUT
-```
-
----
-
-## Thread Interface (`kernel/core/clone.c`)
+### Timer
 
 ```c
-int32_t sys_clone(uint32_t flags, void *child_stack,
-                  int *ptid, uint32_t tls, int *ctid);
-
-// Clone flags:
-#define CLONE_VM        0x00000100  // Share virtual memory
-#define CLONE_FS        0x00000200  // Share filesystem info
-#define CLONE_FILES     0x00000400  // Share file descriptors
-#define CLONE_SIGHAND   0x00000800  // Share signal handlers
-#define CLONE_THREAD    0x00010000  // Same thread group
-#define CLONE_SETTLS    0x00080000  // Set TLS for child
-#define CLONE_CHILD_SETTID   0x01000000
-#define CLONE_PARENT_SETTID  0x00100000
-#define CLONE_CHILD_CLEARTID 0x00200000
+void pit_init(uint32_t hz);
+uint64_t time_now_ms(void);
+void time_now_timeval(struct k_timeval *);
+void time_now_timespec(struct k_timespec *);
+void time_sleep_timespec(const struct k_timespec *req, struct k_timespec *rem);
 ```
 
----
-
-## Socket Interface (`kernel/net/socket.c`)
+### Console + framebuffer
 
 ```c
-int32_t sys_socket(int domain, int type, int protocol);
-int32_t sys_bind(int sockfd, const struct sockaddr *addr, socklen_t len);
-int32_t sys_listen(int sockfd, int backlog);
-int32_t sys_accept(int sockfd, struct sockaddr *addr, socklen_t *len);
-int32_t sys_connect(int sockfd, const struct sockaddr *addr, socklen_t len);
-int32_t sys_send(int sockfd, const void *buf, size_t len, int flags);
-int32_t sys_recv(int sockfd, void *buf, size_t len, int flags);
-int32_t sys_shutdown(int sockfd, int how);
-
-// Supported: AF_UNIX domain only
+void vga_init(void);
+void vga_graphics_mode(int mode);
+void vga_graphics_palette(const uint32_t *rgb, size_t off, size_t n);
 ```
 
----
-
-## FAT12 Filesystem (`kernel/fs/fat12.c`)
+### Block + filesystem
 
 ```c
-int fat12_mount(void *device);           // Mount FAT12 filesystem
-int fat12_unmount(void);                 // Unmount
-int fat12_lookup(const char *name, uint16_t dir_cluster, fat12_dirent_t *result);
-ssize_t fat12_read(uint16_t cluster, uint8_t *buf, size_t count, uint32_t offset);
-int fat12_readdir(uint16_t dir_cluster, int index, fat12_dirent_t *result);
-int fat12_is_mounted(void);
-
-// Read-only - write operations return -EROFS
+int pci_enum(void);
+int virtio_blk_probe(void);
+int ext2_mount(block_device_t *);
+int vfs_init(void);
 ```
 
----
+### SMP
 
-## Adding New Syscalls
-
-1. Define syscall number in `uapi/syscalls.def`
-2. Add handler in appropriate `kernel/syscalls/sys_*.c`
-3. Add extern declaration in `syscall_table.c`
-4. Register in `syscall_handlers[]` in `syscall_table.c`
-
----
-
-## Constants
-
-All magic numbers should be defined in:
-- `include/kernel/constants.h` - System constants
-- `include/kernel/ports.h` - Hardware port addresses
-- `include/kernel/types.h` - Type definitions
+```c
+void acpi_parse(void);
+void lapic_init(void);
+void ioapic_init(void);
+void smp_start_aps(void);
+struct per_cpu *this_cpu(void);
+void smp_tlb_flush_all(void);
+```

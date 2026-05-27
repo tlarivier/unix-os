@@ -1,6 +1,10 @@
 #ifndef KERNEL_EXEC_H
 #define KERNEL_EXEC_H
 
-int sys_execve(const char *pathname, char *const argv[], char *const envp[]);
+#include <kernel/process.h>
+#include <stdint.h>
 
-#endif 
+int setup_exec_user_stack(process_t *proc, char **argv, int argc, char **envp,
+                          int envc);
+
+#endif

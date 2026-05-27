@@ -1,35 +1,30 @@
-;
-; boot.asm - x86 Bootloader
-;
+; boot.asm — legacy 16-bit floppy bootloader for build/bin/os.img (`make test`/`debug`).
+; NOT on the default boot path: QEMU `-kernel` and GRUB use multiboot via
+; entry.asm + multiboot2.asm. Kept to preserve the floppy-boot test target
+; (see docs/ARCHITECTURE.md) — don't regress without updating the test plan.
 
 [org 0x7c00]
 [bits 16]
 
-; ============================================================================
-; Constants
-; ============================================================================
-KERNEL_OFFSET   equ 0x10000     ; legacy bootloader address
-KERNEL_SEGMENTS equ 320         ; ~160KB, covers full kernel with embedded binaries
+KERNEL_OFFSET   equ 0x10000     ; legacy load address
+KERNEL_SEGMENTS equ 320         ; ~160KB, full kernel + embedded binaries
 
-; ============================================================================
-; Entry Point
-; ============================================================================
 start:
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
     mov sp, 0x7c00
-    
-    mov [boot_drive], dl        ; Save boot drive from BIOS
-    
+
+    mov [boot_drive], dl        ; BIOS passes boot drive in DL
+
     mov si, msg_boot
     call print
-    
+
     call load_kernel
     call enter_protected_mode
-    
-    jmp $                       ; Should never reach
+
+    jmp $                       ; unreachable
 
 print:
     pusha
@@ -44,125 +39,101 @@ print:
     popa
     ret
 
-; ============================================================================
-; Load kernel from disk LBA-style 
-; ============================================================================
+; Read KERNEL_SEGMENTS sectors via BIOS int 13h into ES:BX = 0x1000:0000.
+; Walks CHS manually (18 sectors/track, 2 heads); handles 64K segment rollover.
 load_kernel:
     mov si, msg_loading
     call print
-    
-    mov ax, 0x1000              ; ES:BX = 0x1000:0000 = 0x10000
+
+    mov ax, 0x1000
     mov es, ax
     xor bx, bx
-    
-    mov cl, 2                   ; Start at sector 2 (after boot)
-    mov ch, 0                   ; Cylinder 0
-    mov dh, 0                   ; Head 0
-    mov di, KERNEL_SEGMENTS     ; Sectors to read
-    
+
+    mov cl, 2                   ; start at sector 2 (sector 1 = this boot code)
+    mov ch, 0
+    mov dh, 0
+    mov di, KERNEL_SEGMENTS
+
 .read_loop:
     cmp di, 0
     je .done
-    
-    ; Reset disk before each read 
-    xor ax, ax
+
+    xor ax, ax                  ; reset disk before each read
     mov dl, [boot_drive]
     int 0x13
-    
-    ; Read 1 sector at a time 
-    mov ah, 0x02
+
+    mov ah, 0x02                ; read 1 sector
     mov al, 1
     mov dl, [boot_drive]
     int 0x13
     jc .error
-    
-    ; Advance buffer by 512 bytes
+
     add bx, 512
     jnc .no_segment_overflow
-    
-    ; Handle segment overflow (every 64KB)
-    mov ax, es
+
+    mov ax, es                  ; bx wrapped — bump ES by 0x1000 (64K)
     add ax, 0x1000
     mov es, ax
     xor bx, bx
-    
+
 .no_segment_overflow:
-    ; Advance CHS address
-    inc cl                      ; Next sector
-    cmp cl, 19                  ; Sectors 1-18 per track
+    inc cl
+    cmp cl, 19                  ; sectors 1..18 per track
     jne .next_sector
-    
-    mov cl, 1                   ; Reset to sector 1
-    inc dh                      ; Next head
-    cmp dh, 2                   ; 2 heads (0-1)
+
+    mov cl, 1
+    inc dh
+    cmp dh, 2                   ; 2 heads
     jne .next_sector
-    
-    xor dh, dh                  ; Reset head
-    inc ch                      ; Next cylinder
-    
+
+    xor dh, dh
+    inc ch                      ; next cylinder
+
 .next_sector:
     dec di
     jmp .read_loop
-    
+
 .done:
     mov si, msg_ok
     call print
     ret
-    
+
 .error:
     mov si, msg_error
     call print
     jmp $
 
-; ============================================================================
-; Enter 32-bit Protected Mode
-; ============================================================================
+; A20 via fast gate (port 0x92), load GDT, set CR0.PE, far jump to flush pipeline.
 enter_protected_mode:
     cli
-    
+
     in al, 0x92
     or al, 2
     out 0x92, al
-    
+
     lgdt [gdt_descriptor]
-    
+
     mov eax, cr0
     or eax, 1
     mov cr0, eax
-    
+
     jmp 0x08:protected_mode
 
-; ============================================================================
-; GDT 
-; ============================================================================
+; Flat GDT: null / ring0 code (RX) / ring0 data (RW), 4K gran, 32-bit.
 gdt_start:
-    dq 0                        ; Null descriptor
-
+    dq 0
 gdt_code:
-    dw 0xffff                   ; Limit
-    dw 0                        ; Base (low)
-    db 0                        ; Base (mid)
-    db 10011010b                ; Access: Present, Ring 0, Code, Readable
-    db 11001111b                ; Flags: 4KB granularity, 32-bit
-    db 0                        ; Base (high)
-
+    dw 0xffff, 0
+    db 0, 10011010b, 11001111b, 0
 gdt_data:
-    dw 0xffff
-    dw 0
-    db 0
-    db 10010010b                ; Access: Present, Ring 0, Data, Writable
-    db 11001111b
-    db 0
-
+    dw 0xffff, 0
+    db 0, 10010010b, 11001111b, 0
 gdt_end:
 
 gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd gdt_start
 
-; ============================================================================
-; 32-bit Protected Mode
-; ============================================================================
 [bits 32]
 protected_mode:
     mov ax, 0x10
@@ -172,20 +143,16 @@ protected_mode:
     mov gs, ax
     mov ss, ax
     mov esp, 0x90000
-    
-    ; Copy kernel from 0x10000 to 0x100000 (1MB)
+
+    ; Relocate kernel 0x10000 → 0x100000 (1MB), then jump to entry at 0x100100.
     cld
     mov esi, 0x10000
     mov edi, 0x100000
     mov ecx, KERNEL_SEGMENTS * 128  ; dwords
     rep movsd
-    
-    ; Jump to kernel entry (0x100100)
+
     jmp 0x08:0x100100
 
-; ============================================================================
-; Data
-; ============================================================================
 [bits 16]
 boot_drive:     db 0
 msg_boot:       db 'Unix-OS Bootloader', 13, 10, 0
@@ -193,8 +160,5 @@ msg_loading:    db 'Loading kernel...', 0
 msg_ok:         db 'OK', 13, 10, 0
 msg_error:      db 'DISK ERROR', 13, 10, 0
 
-; ============================================================================
-; Boot signature
-; ============================================================================
 times 510-($-$$) db 0
 dw 0xaa55

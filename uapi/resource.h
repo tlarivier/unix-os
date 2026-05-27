@@ -3,39 +3,39 @@
 
 #include <../uapi/types.h>
 
-#define RLIMIT_CPU      0   
-#define RLIMIT_FSIZE    1   
-#define RLIMIT_DATA     2   
-#define RLIMIT_STACK    3   
-#define RLIMIT_CORE     4   
-#define RLIMIT_RSS      5   
-#define RLIMIT_NPROC    6   
-#define RLIMIT_NOFILE   7   
-#define RLIMIT_MEMLOCK  8   
-#define RLIMIT_AS       9   
+#define RLIMIT_CPU 0
+#define RLIMIT_FSIZE 1
+#define RLIMIT_DATA 2
+#define RLIMIT_STACK 3
+#define RLIMIT_CORE 4
+#define RLIMIT_RSS 5
+#define RLIMIT_NPROC 6
+#define RLIMIT_NOFILE 7
+#define RLIMIT_MEMLOCK 8
+#define RLIMIT_AS 9
 
-#define RLIM_NLIMITS    10  
+#define RLIM_NLIMITS 10
 
 typedef uint32_t rlim_t;
 
-#define RLIM_INFINITY   0xFFFFFFFF  
-#define RLIM_SAVED_MAX  RLIM_INFINITY
-#define RLIM_SAVED_CUR  RLIM_INFINITY
+#define RLIM_INFINITY 0xFFFFFFFF
+#define RLIM_SAVED_MAX RLIM_INFINITY
+#define RLIM_SAVED_CUR RLIM_INFINITY
 
 struct rlimit {
-    rlim_t rlim_cur;    
-    rlim_t rlim_max;    
+  rlim_t rlim_cur;
+  rlim_t rlim_max;
 };
 
-#define DEFAULT_RLIMIT_CPU      RLIM_INFINITY
-#define DEFAULT_RLIMIT_FSIZE    RLIM_INFINITY  
-#define DEFAULT_RLIMIT_DATA     (32 * 1024 * 1024)  
-#define DEFAULT_RLIMIT_STACK    (8  * 1024 * 1024)  
-#define DEFAULT_RLIMIT_CORE     0                   
-#define DEFAULT_RLIMIT_RSS      (64 * 1024 * 1024)  
-#define DEFAULT_RLIMIT_NPROC    256                 
-#define DEFAULT_RLIMIT_NOFILE   1024                
-#define DEFAULT_RLIMIT_MEMLOCK  (64  * 1024)        
-#define DEFAULT_RLIMIT_AS       (128 * 1024 * 1024) 
+#define DEFAULT_RLIMIT_CPU RLIM_INFINITY
+#define DEFAULT_RLIMIT_FSIZE RLIM_INFINITY
+#define DEFAULT_RLIMIT_DATA (32 * 1024 * 1024)
+#define DEFAULT_RLIMIT_STACK (8 * 1024 * 1024)
+#define DEFAULT_RLIMIT_CORE 0
+#define DEFAULT_RLIMIT_RSS (64 * 1024 * 1024)
+#define DEFAULT_RLIMIT_NPROC 256
+#define DEFAULT_RLIMIT_NOFILE 1024
+#define DEFAULT_RLIMIT_MEMLOCK (64 * 1024)
+#define DEFAULT_RLIMIT_AS (128 * 1024 * 1024)
 
-#endif 
+#endif

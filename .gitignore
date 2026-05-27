@@ -1,1 +1,14 @@
 build
+.DS_Store
+
+# Auto-generated from initramfs.cpio by the Makefile
+src/kernel/fs/initramfs_data.h
+
+# Doom + demo screenshots — large binaries, not source
+docs/*.ppm
+docs/*.png
+docs/*.log
+src/userspace/doom
+branches/
+doom1.wad
+*.wad

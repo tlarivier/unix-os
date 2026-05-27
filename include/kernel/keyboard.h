@@ -5,11 +5,9 @@
 
 void keyboard_init(void);
 void keyboard_handle_irq(void);
-int kb_has_char(void);
 char kb_get_char(void);
-char kb_try_get_char(void);
 
-int keyboard_set_raw_mode(int enable);
-int keyboard_get_raw_mode(void);
+void kb_external_push(char c);
+int kb_event_pop(uint8_t *out_scancode, uint8_t *out_flags);
 
-#endif 
+#endif

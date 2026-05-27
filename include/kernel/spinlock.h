@@ -1,139 +1,120 @@
 #ifndef KERNEL_SPINLOCK_H
 #define KERNEL_SPINLOCK_H
 
+#include <kernel/barriers.h>
+#include <kernel/lockdep.h>
+#include <kernel/preempt.h>
 #include <stdint.h>
 
-/*
- * Spinlock implementation - SMP SAFETY
- * 
- * "Simple and correct beats complex and fast" - Linus
- * These are the building blocks for all kernel synchronization
- */
-
 typedef struct spinlock {
-    volatile uint32_t locked;   // 0 = unlocked, 1 = locked
-    const char *name;           // For debugging
-    uint32_t cpu;               // CPU that holds the lock
+  volatile uint32_t locked;
+  const char *name;
+  struct cpu *holder;
 } spinlock_t;
 
-/* Static spinlock initializer */
-#define SPINLOCK_INIT(name_str) { .locked = 0, .name = name_str, .cpu = 0 }
+#define SPINLOCK_INIT(name_str)                                                \
+  {.locked = 0, .name = (name_str), .holder = (struct cpu *)0}
 
-/* Dynamic spinlock initialization */
 static inline void spinlock_init(spinlock_t *lock, const char *name) {
-    lock->locked = 0;
-    lock->name = name;
-    lock->cpu = 0;
+  lock->locked = 0;
+  lock->name = name;
+  lock->holder = (struct cpu *)0;
 }
 
-/* Acquire spinlock - ATOMIC */
 static inline void spin_lock(spinlock_t *lock) {
-    // Disable interrupts to prevent deadlocks
-    __asm__ volatile("cli");
-    
-    // Try to acquire lock atomically
-    while (__sync_lock_test_and_set(&lock->locked, 1)) {
-        // Spin wait with pause instruction (Intel optimization)
-        __asm__ volatile("pause" ::: "memory");
-    }
-    
-    // Memory barrier - prevent reordering
-    __asm__ volatile("" ::: "memory");
+  __asm__ volatile("cli");
+  preempt_disable();
+
+  while (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
+    cpu_relax();
+  }
+
+  lock->holder = this_cpu();
+  lockdep_acquire(lock->name);
 }
 
-/* Release spinlock */
 static inline void spin_unlock(spinlock_t *lock) {
-    // Memory barrier
-    __asm__ volatile("" ::: "memory");
-    
-    // Release lock
-    __sync_lock_release(&lock->locked);
-    
-    // Re-enable interrupts
-    __asm__ volatile("sti");
+  lockdep_release(lock->name);
+  lock->holder = (struct cpu *)0;
+
+  __atomic_clear(&lock->locked, __ATOMIC_RELEASE);
+
+  preempt_enable();
+  __asm__ volatile("sti");
 }
 
-/* Try to acquire lock without blocking */
 static inline int spin_trylock(spinlock_t *lock) {
-    __asm__ volatile("cli");
-    
-    if (__sync_lock_test_and_set(&lock->locked, 1)) {
-        __asm__ volatile("sti");
-        return 0;  // Failed to acquire
-    }
-    
-    __asm__ volatile("" ::: "memory");
-    return 1;  // Successfully acquired
+  __asm__ volatile("cli");
+  preempt_disable();
+
+  if (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
+    preempt_enable();
+    __asm__ volatile("sti");
+    return 0;
+  }
+
+  lock->holder = this_cpu();
+  lockdep_acquire(lock->name);
+  return 1;
 }
 
-/* Check if lock is held */
-static inline int spin_is_locked(spinlock_t *lock) {
-    return lock->locked;
+static inline void raw_spin_lock(spinlock_t *lock) {
+  preempt_disable();
+  while (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
+    cpu_relax();
+  }
+  lock->holder = this_cpu();
+  lockdep_acquire(lock->name);
 }
 
-/*
- * IRQ-safe spinlock variants
- * These save/restore interrupt state instead of unconditionally enabling
- */
+static inline void raw_spin_unlock(spinlock_t *lock) {
+  lockdep_release(lock->name);
+  lock->holder = (struct cpu *)0;
+  __atomic_clear(&lock->locked, __ATOMIC_RELEASE);
+  preempt_enable();
+}
 
-/* Acquire spinlock, saving interrupt state */
+static inline int spin_is_locked(const spinlock_t *lock) {
+  return __atomic_load_n(&lock->locked, __ATOMIC_RELAXED);
+}
+
+static inline int spin_held_by_me(const spinlock_t *lock) {
+  return spin_is_locked(lock) && lock->holder == this_cpu();
+}
+
 static inline void spin_lock_irqsave(spinlock_t *lock, uint32_t *flags) {
-    /* Save EFLAGS and disable interrupts atomically */
-    __asm__ volatile(
-        "pushf\n\t"
-        "pop %0\n\t"
-        "cli"
-        : "=r"(*flags)
-        :
-        : "memory"
-    );
-    
-    while (__sync_lock_test_and_set(&lock->locked, 1)) {
-        __asm__ volatile("pause" ::: "memory");
-    }
-    
-    __asm__ volatile("" ::: "memory");
+  __asm__ volatile("pushf\n\t"
+                   "pop %0\n\t"
+                   "cli"
+                   : "=r"(*flags)::"memory");
+  preempt_disable();
+
+  while (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
+    cpu_relax();
+  }
+
+  lock->holder = this_cpu();
+  lockdep_acquire(lock->name);
 }
 
-/* Release spinlock, restoring interrupt state */
 static inline void spin_unlock_irqrestore(spinlock_t *lock, uint32_t flags) {
-    __asm__ volatile("" ::: "memory");
-    
-    __sync_lock_release(&lock->locked);
-    
-    /* Restore EFLAGS (including interrupt flag) */
-    __asm__ volatile(
-        "push %0\n\t"
-        "popf"
-        :
-        : "r"(flags)
-        : "memory", "cc"
-    );
+  lockdep_release(lock->name);
+  lock->holder = (struct cpu *)0;
+
+  __atomic_clear(&lock->locked, __ATOMIC_RELEASE);
+
+  preempt_enable();
+  __asm__ volatile("push %0; popf" ::"r"(flags) : "memory", "cc");
 }
 
-/* Disable interrupts and save state (without lock) */
 static inline uint32_t local_irq_save(void) {
-    uint32_t flags;
-    __asm__ volatile(
-        "pushf\n\t"
-        "pop %0\n\t"
-        "cli"
-        : "=r"(flags)
-        :
-        : "memory"
-    );
-    return flags;
+  uint32_t flags;
+  __asm__ volatile("pushf; pop %0; cli" : "=r"(flags)::"memory");
+  return flags;
 }
 
-/* Restore interrupt state */
 static inline void local_irq_restore(uint32_t flags) {
-    __asm__ volatile(
-        "push %0\n\t"
-        "popf"
-        :
-        : "r"(flags)
-        : "memory", "cc"
-    );
+  __asm__ volatile("push %0; popf" ::"r"(flags) : "memory", "cc");
 }
 
-#endif /* KERNEL_SPINLOCK_H */
+#endif

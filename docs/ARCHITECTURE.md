@@ -1,385 +1,249 @@
-# UnixOS - Documentation Technique
+# UnixOS Architecture
 
-## Introduction
+This document describes the kernel as it stands today: an SMP (1-4 CPU)
+x86-32 monolith that boots from Multiboot2, mounts ext2 from virtio-blk,
+runs ring-3 userspace through a unified syscall table, and ships with a
+working port of Doom.
 
-UnixOS est un système d'exploitation éducatif développé from scratch pour l'architecture x86 32-bit. Il s'inspire des principes de conception de Linux, Minix et des systèmes Unix traditionnels.
-
-## Architecture Générale
-
-### Vue d'Ensemble
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     ESPACE UTILISATEUR                          │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐            │
-│  │  init   │  │   sh    │  │   ls    │  │  cat    │  ...       │
-│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘            │
-│       │            │            │            │                  │
-│  ┌────┴────────────┴────────────┴────────────┴────┐            │
-│  │                    libc.a                       │            │
-│  └────────────────────────┬────────────────────────┘            │
-│                           │                                     │
-│  ┌────────────────────────┴────────────────────────┐            │
-│  │              ld.so (dynamic linker)             │            │
-│  └────────────────────────┬────────────────────────┘            │
-├───────────────────────────┼─────────────────────────────────────┤
-│                      int 0x80                                   │
-├───────────────────────────┼─────────────────────────────────────┤
-│                     ESPACE KERNEL                               │
-│  ┌────────────────────────┴────────────────────────┐            │
-│  │               Syscall Dispatcher                │            │
-│  └─────┬──────────┬──────────┬──────────┬─────────┘            │
-│        │          │          │          │                       │
-│  ┌─────┴───┐ ┌────┴────┐ ┌───┴───┐ ┌────┴────┐                 │
-│  │ sys_fs  │ │sys_proc │ │sys_mem│ │sys_misc │                 │
-│  └─────────┘ └─────────┘ └───────┘ └─────────┘                 │
-│        │          │          │          │                       │
-│  ┌─────┴──────────┴──────────┴──────────┴─────────┐            │
-│  │                    VFS                          │            │
-│  │              Process Manager                    │            │
-│  │              Memory Manager                     │            │
-│  │                Scheduler                        │            │
-│  └────────────────────────┬───────────────────────┘            │
-│                           │                                     │
-│  ┌────────────────────────┴───────────────────────┐            │
-│  │                   Drivers                       │            │
-│  │    (VGA, Keyboard, Timer, ATA, Serial)         │            │
-│  └────────────────────────┬───────────────────────┘            │
-│                           │                                     │
-│  ┌────────────────────────┴───────────────────────┐            │
-│  │              Hardware Abstraction              │            │
-│  │         (GDT, IDT, Paging, Interrupts)        │            │
-│  └────────────────────────────────────────────────┘            │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Organisation du Code Source
-
-```
-unix-os/
-├── boot/               Bootloader assembleur
-├── kernel/             Code kernel
-│   ├── arch/x86/       Code spécifique x86 (GDT, IDT, paging)
-│   ├── core/           Gestion processus, scheduler, signaux
-│   ├── drivers/        Pilotes matériel
-│   ├── fs/             Système de fichiers virtuel
-│   ├── init/           Initialisation kernel
-│   ├── ipc/            Communication inter-processus (pipes)
-│   ├── irq/            Gestion interruptions
-│   ├── lib/            Bibliothèque kernel interne
-│   ├── mm/             Gestion mémoire et paging
-│   ├── security/       Sécurité et capabilities
-│   └── syscalls/       Implémentation syscalls
-├── lib/                Bibliothèques userspace
-│   ├── libc/           Implémentation libc
-│   └── crt/            C runtime (crt0)
-├── userspace/          Programmes utilisateur
-│   ├── bin/            Sources des commandes
-│   ├── include/        Headers userspace
-│   └── ldso/           Runtime linker (ld.so)
-├── include/            Headers partagés
-│   ├── kernel/         Headers kernel
-│   └── libc/           Headers libc
-├── uapi/               Interface Kernel-Userspace stable
-└── initramfs/          Archive CPIO pour boot
-```
+The intent is to be the reference for *contracts* between subsystems --
+who owns what state, which locks may be held at which call sites, and
+what is *not allowed* to cross a given boundary. Per-file invariants are
+also inscribed as a block comment at the head of every `.c`.
 
 ---
 
-## Choix Architecturaux
-
-### Kernel Monolithique
-
-UnixOS utilise une architecture **monolithique** plutôt que microkernel. Ce choix a été fait pour :
-
-- **Simplicité** : Un seul espace d'adressage pour le kernel simplifie le développement
-- **Performance** : Pas de surcoût IPC entre composants kernel
-
-Le kernel reste néanmoins modulaire dans son organisation interne, avec des sous-systèmes séparés.
-
-### Séparation Kernel/Userspace
-
-La frontière entre kernel et userspace est stricte :
-
-- **Ring 0** : Code kernel, accès complet au matériel
-- **Ring 3** : Code utilisateur, accès via syscalls uniquement
-- **Paging** : Chaque processus a son propre espace d'adressage
-- **uaccess** : Toute copie mémoire kernel↔user passe par `copy_to_user`/`copy_from_user`
-
-### Interface UAPI
-
-Inspiré de Linux, le dossier `uapi/` contient l'interface stable entre kernel et userspace :
-
-- **syscalls.def** : Définition des syscalls via X-macro, partagée kernel et libc
-- **types.h** : Types fondamentaux (`__kernel_pid_t`, etc.)
-- **errno.h** : Codes d'erreur POSIX
-- **abi_version.h** : Versioning de l'ABI pour compatibilité future
-
-Cette approche garantit qu'un binaire compilé reste compatible même si le kernel évolue.
-
-### Dynamic Linking en Userspace
-
-Contrairement à certains OS éducatifs qui font le linking dans le kernel, UnixOS place le dynamic linker (`ld.so`) entièrement en userspace. Cela :
-
-- Réduit la taille et complexité du kernel
-- Permet l'évolution du linker sans modifier le kernel
-
-Le kernel se contente de charger `ld.so` via `PT_INTERP` si le binaire est dynamique.
-
-### Virtual Filesystem (VFS)
-
-Le VFS abstrait les différents systèmes de fichiers derrière une interface unique :
-
-- **Inodes** : Représentation unifiée des fichiers
-- **Dentry cache** : Cache des entrées répertoire
-- **File operations** : read, write, open, close...
-
-Un filesystem RAM (ramfs) et FAT12 (lecture seule) sont implémentés. L'architecture permet d'ajouter ext2, etc.
-
-### Architecture Boot (Void/Linux style)
+## 1. Bring-up
 
 ```
-kernel
- └── monte initramfs (CPIO)
-     └── execve("/sbin/init")
-         └── ld.so (userspace)
-             └── libc.so
-                 └── binaires userspace
+GRUB2 --(Multiboot2)--> boot/multiboot_entry.S
+  -> src/kernel/init/main.c::kernel_main()
+       serial_init / vga_init                       (text output)
+       percpu_init_bsp / gdt_init / tss_init_bsp    (segmentation)
+       paging_init / heap_init                      (mm)
+       idt_init / pic_remap / pit_init              (irq + timer)
+       pci_enum / virtio_blk_probe                  (block I/O)
+       ramfs_init / vfs_init / ext2_mount           (filesystems)
+       acpi_parse / lapic_init / ioapic_init        (SMP discovery)
+       smp_start_aps                                (4-CPU bring-up)
+       scheduler_init / kproc_create_idles          (sched)
+       init_launch("/bin/init")                     (ring 3)
 ```
 
-**Principe fondamental**: Le kernel ne connaît QUE l'initramfs, jamais les binaires eux-mêmes.
+The BSP path lives in `src/kernel/init/main.c`. The AP trampoline is in
+`src/kernel/boot/ap_trampoline.S`; once an AP lands in C it follows
+`src/kernel/init/smp_bringup.c::ap_main()`. From there every CPU enters the
+scheduler.
 
-### Hot Reload Support
+## 2. Address space layout
 
-Le système supporte le hot reload de bibliothèques via:
-- **ABI versionnée**: `include/hotreload.h` définit les structures
-- **dlopen/dlsym**: ld.so userspace gère le chargement dynamique
-- **Swap atomique**: Remplacement thread-safe des APIs
+| Range                  | Use                              |
+|------------------------|----------------------------------|
+| 0x00000000 - 0x000FFFFF| BIOS/EBDA, unmapped after boot   |
+| 0x00100000 - 0x003FFFFF| kernel image (.text + .rodata)   |
+| 0x00400000 - 0x00BFFFFF| kernel .data + .bss + heap arena |
+| 0x00C00000 - 0x00FFFFFF| early identity scratch           |
+| 0x40000000 - 0x7FFFFFFF| user code, data, brk             |
+| 0x80000000 - 0xBFFFFFFF| user mmap region                 |
+| 0xC0000000 - 0xC03FFFFF| user stack                       |
+| 0xFEC00000 / 0xFEE00000| IOAPIC / LAPIC MMIO              |
 
----
+User-space sentinels: `USER_CODE_BASE = 0x40000000`, `USER_SPACE_END =
+0xC0400000`, `HEAP_START = 0x60000000`. They are the single source of
+truth for pointer-range checks in `sys_signal`, `sys_brk`, `sys_mmap`.
 
-## Ce Qui a Été Réalisé
+## 3. Memory management
 
-### Kernel Core
-
-- **Boot** : Bootloader assembleur charge le kernel depuis disquette
-- **GDT/IDT** : Segmentation et table d'interruptions x86
-- **Paging** : Pagination avec isolation processus (COW désactivé pour stabilité)
-- **Scheduler** : Ordonnanceur MLFQ 4 niveaux (Multi-Level Feedback Queue)
-- **Processus** : fork, exec, exit, waitpid fonctionnels
-- **Threads** : clone() avec CLONE_VM, CLONE_FILES, TLS support
-- **Signaux** : Gestion signaux POSIX complète avec job control (SIGTSTP/SIGCONT)
-- **IPC** : Pipes, System V semaphores, shared memory, futex
-
-### Syscalls
-
-**78 syscalls** implémentés (vérifiés dans syscall_table.c), incluant :
-
-- Fichiers : open, read, write, close, stat, mkdir, unlink, flock...
-- Processus : fork, exec, exit, waitpid, getpid, kill, clone, gettid...
-- Mémoire : brk, mmap, munmap, mprotect
-- Signaux : signal, sigaction, sigprocmask, sigreturn
-- Temps : time, nanosleep, alarm
-- Terminal : ioctl, tcgetattr, tcsetattr
-- IPC : pipe, semget, semop, shmget, shmat, futex
-- Sockets : socket, bind, listen, accept, connect, send, recv
-- UID/GID : getuid, setuid, geteuid, seteuid...
-
-### Networking
-
-- **Sockets AF_UNIX** : Communication locale inter-processus
-- **Operations** : socket, bind, listen, accept, connect, send, recv, shutdown
-
-### Filesystems
-
-- **ramfs** : Filesystem en RAM pour initramfs
-- **FAT12** : Lecture seule, support disquettes
-
-### Userspace
-
-- **libc** : Implémentation minimale mais fonctionnelle (stdio, stdlib, string, unistd)
-- **ld.so** : Runtime linker avec support DT_NEEDED et lazy binding
-- **Commandes** : init, sh, ls, cat, mkdir, rm, pwd, echo, touch, kill, ps
-
-### Drivers
-
-- **VGA** : Mode texte et mode graphique 320x200
-- **Keyboard** : Driver PS/2 avec buffer
-- **Timer** : PIT pour scheduling
-- **ATA** : Accès disque (lecture/écriture secteurs)
-- **Serial** : Sortie debug via COM1
-- **Floppy** : Lecture disquettes FAT12
-
----
-
-## Ce Qui a Été Abandonné
-
-### Tests Kernel en Production
-
-Des fonctions de test (`test_interrupts`, `run_doom_tests`) étaient compilées dans le kernel. Elles sont maintenant sous `#ifdef DEBUG` et **exclues** du build de production.
-
----
-
-## Roadmap
-
-### Court Terme (Prochaines Semaines)
-
-1. **Finaliser initramfs**
-   - Activer le chargement depuis archive CPIO au lieu de binaires embarqués
-   - Réduire la taille du kernel à environ 50KB
-
-2. **Compléter ld.so**
-   - Implémenter le chargement récursif complet des dépendances
-   - Ajouter le support du symbol versioning
-
-3. **Améliorer le shell**
-   - Ajouter les pipes shell (`ls | grep foo`)
-   - Ajouter les redirections (`>`, `<`, `>>`)
-   - Gérer les jobs en arrière-plan (`&`)
-
-4. **Filesystem persistant**
-   - Implémenter ext2 en lecture
-   - Permettre le boot depuis un vrai disque
-
-### Moyen Terme (Prochains Mois)
-
-1. **Networking**
-   - Driver carte réseau (e1000 ou RTL8139)
-   - Stack TCP/IP minimal
-   - Sockets BSD
-
-2. **Graphiques**
-   - Mode VESA haute résolution
-   - Framebuffer userspace
-   - Window manager simple
-
-3. **Multithreading**
-   - Threads POSIX (pthread)
-   - Synchronisation (mutex, condvar)
-
-4. **Mémoire**
-   - Swap sur disque
-   - Shared memory (shmem)
-   - Copy-on-write amélioré
-
-### Long Terme (Vision)
-
-1. **Self-hosting**
-   - Compiler UnixOS sur lui-même
-   - Porter GCC ou un compilateur C simple
-
-2. **SMP**
-   - Support multiprocesseur
-   - Scheduler multi-CPU
-
-3. **Sécurité**
-   - Capabilities complètes
-   - Namespaces et cgroups simplifiés
-   - ASLR
-
----
-
-## Organisation de l'execution
-
-### Initialisation Kernel (Excellent)
-
-L'ordre de `kmain()` respecte les bonnes pratiques:
-- Sécurité AVANT userspace
-- Mémoire AVANT scheduler
-- VFS AVANT exec
-- Syscalls AVANT fork userspace
-
-### Mémoire (Linux-like)
-
-- **Layout précis**:
-  - 0x00000000-0x00100000 (0-1MB):    BIOS/VGA/Boot
-  - 0x00100000-0x00200000 (1-2MB):    Kernel code/data
-  - 0x00200000-0x00A00000 (2-10MB):   Kernel heap (8MB configurable)
-  - 0x00A00000-0x80000000 (10MB-2GB): User space
-  - 0x80000000-0xC0000000 (2GB-3GB):  User stack
-  - 0xC0000000-0xFFFFFFFF (3GB-4GB):  Kernel virtual
-- **Identity mapping**: 0x00000000-0x00C00000 (0-12MB, 3 page tables)
-- **Paging**: Bitmap + refcount, 4KB pages
-- **COW**: Supporté (désactivé pour stabilité - eager copying)
-- **mmap/mprotect**: Rollback en cas d'erreur, MAP_FIXED, MAP_PRIVATE
-- **Zone mmap**: Séparée du heap (base 0x40000000)
-- **Heap**: First-fit avec splitting/coalescing, spinlock protected
-- **SLUB**: O(1) allocator, slab coloring, 64 objects/slab
-
-### Processus & Scheduler
-
-- **process_t**: Job control (pgid, sid, tty), signaux, fd table, mémoire isolée
-- **MLFQ 4 niveaux**: Quantums [5,10,20,40] ticks
-  - Nouveaux processus: queue 0 (haute priorité)
-  - CPU-bound: dégradation sur expiration quantum
-  - I/O-bound: promotion sur blocage (priority boost)
-  - Round-robin dans chaque queue
-- **Fork**: Copie eager de toutes les pages user, héritage signaux/fd/umask
-- **Exec**: Streaming ELF loader, support PIE/ASLR, PT_INTERP
-
-### UAPI 
-
-- Dossier `uapi/` séparé, versionné, partagé kernel/libc
-- ABI version syscall 254 pour compatibilité future
-- `copy_from_user`/`copy_to_user` systématique
-
-### Dynamic Linking (Différenciateur)
-
-Le ld.so userspace implémente:
-- DT_NEEDED, PLT/GOT
-- Relocations i386 (R_386_RELATIVE, R_386_GLOB_DAT, R_386_JMP_SLOT)
-- Lazy binding
-- Constructeurs/destructeurs (.init/.fini)
-
-### ELF Loader 
-
-- **ET_EXEC**: Binaires à adresse fixe (0x08048000)
-- **ET_DYN**: PIE avec ASLR (range 0x10000000-0x40000000)
-- Relocations R_386_RELATIVE appliquées au chargement
-- **ASLR Hardware**: Entropy via RDTSC (CPU timestamp counter)
-- **Streaming loader**: Chargement par chunks de 512 bytes (pas de gros buffer)
-- **PT_INTERP**: Support complet de ld.so avec passage de elf_phdr/elf_entry
-
-### Initramfs 
-
-**Format**: CPIO newc (magic 070701)
-
-Trois modes de chargement (par ordre de priorité):
-1. **Multiboot2**: Module passé par GRUB2 (`module2 /boot/initramfs.cpio`)
-2. **Multiboot1**: Module QEMU `-kernel` boot
-3. **Embarqué**: Compilé dans le kernel (`-DHAVE_INITRAMFS`)
-4. **Legacy**: Binaires embarqués via headers .h
-
-**Features**: Création automatique des répertoires parents, normalisation des chemins
-
-### Boot 
-
-Deux méthodes de boot supportées:
-
-**1. GRUB ISO (recommandé)**
-```bash
-make iso                    # Crée build/unixos.iso
-qemu-system-i386 -cdrom build/unixos.iso -m 64M
+```
+src/kernel/mm/
+  frame_alloc.c   bitmap + per-CPU magazine + page refcount
+  page_dir.c      kernel page directory, map_page, get_physical_addr
+  paging.asm      cr3 load, invlpg
+  cow_temp.c      handle_cow_fault, temp_map_frame
+  mmap_file.c     file-backed mmap region registry; only TU calling vfs_pread
+  process_mm.c    create / destroy / clone_process_memory
+  heap.c          first-fit kernel heap (kmalloc/kfree)
+  slub.c          slab-style fixed-size object caches
+  uaccess.c       copy_{from,to}_user with fault handling
+  memory.c        memory_layout symbols, early reservations
 ```
 
-**2. Legacy Floppy**
-```bash
-make                        # Crée build/bin/os.img  
-qemu-system-i386 -fda build/bin/os.img -m 64M
+Frame ownership invariants live in
+`include/kernel/mm_internal.h` (private to the mm subsystem). The
+heap arena and the frame allocator hold **disjoint** physical ranges --
+violating this is a known footgun.
+
+The page-fault path enters `mm/paging.c::page_fault_handler()`, which
+routes to one of: COW (`handle_cow_fault`), demand-paged file mmap
+(`handle_demand_fault`), demand-zero brk page, or SIGSEGV.
+
+## 4. Process model
+
+`process_t` (in `include/kernel/process.h`) carries:
+
+- identity: `pid`, `ppid`, `pgid`, `sid`, `uid/gid/euid/egid/suid/sgid`
+- memory: `process_memory_t *memory` (page directory + region list + brk)
+- fds: `fd_table[MAX_FDS=64]` -- index into the global VFS open-file
+  table; -1 = closed
+- signals: `signal_handlers[NSIG_HANDLED=32]`, pending mask
+- scheduling: `state`, `priority`, `quantum`, `owner_cpu`, run-queue
+  links
+- canary: `stack_canary` (checked at every syscall entry and exit)
+- bookkeeping: `children_wq` (wait queue parents block on),
+  `exit_code`, hash-table link
+
+The global process table is a hashtable keyed by pid; entries are
+embedded in `process_t`, so insert / lookup never calls `kmalloc` under
+a spinlock. All edits go through `src/kernel/core/process.c` -- never
+mutate `proc->state` from a syscall directly.
+
+### Fork / exec / exit
+
+```
+sys_fork                              src/kernel/core/fork.c
+  + clone_process_memory  (CoW)       src/kernel/mm/process_mm.c
+  + scheduler_add_process             src/kernel/core/sched.c
+
+sys_execve                            src/kernel/core/exec.c
+  copy argv/envp into kernel buffers (BEFORE any cli)
+  load_elf -> new process_memory_t
+  reset CLOEXEC fds and signal_handlers
+  atomic swap memory ; jump_to_usermode
+
+process_exit                          src/kernel/core/process.c
+  state = ZOMBIE ; wake_all(&parent->children_wq)
+  parent's waitpid then calls process_terminate
 ```
 
-Architecture:
-- Kernel à 0x100000 (1MB)
-- Entry point unifié à 0x100100
-- Multiboot1 + Multiboot2 headers
-- Initramfs via module GRUB
+## 5. Scheduling
 
-### Symbol Versioning (ld.so)
+Multi-level feedback queue with priority boosting and work-stealing.
 
-Support des structures ELF pour le versioning:
-- `DT_VERSYM`, `DT_VERDEF`, `DT_VERNEED`
-- Permet compatibilité binaire (`foo@UNIXOS_1.0`)
+- Run-queues are per-CPU; each CPU owns its rq_lock.
+- `schedule()` picks the highest-priority runnable thread on the local
+  CPU; if empty, work-steals from a peer.
+- BSP idle: `kproc_create_idles` allocates an idle `process_t` per CPU
+  so the scheduler never sees an empty run-queue.
+- Preemption: PIT tick -> `scheduler_tick()` -> may set need_resched;
+  syscall exit and IRQ return check the flag.
 
----
+Critical invariants:
 
-*Document mis à jour le 30 janvier 2026*
+- `schedule()` must force a switch if `current == idle && next != NULL`
+  (an early bug that hung the BSP under `-smp 4`).
+- A process's `owner_cpu` is sticky; only work-stealing migrates it,
+  and the stealer takes the **owner's** rq_lock.
+- The lockdep facility is currently single-CPU only -- `CONFIG_LOCKDEP`
+  is off in the SMP build (see `src/kernel/lib/lockdep.c`).
+
+## 6. Filesystems
+
+```
+                       +-------------+
+   syscalls (sys_fs)   |  VFS layer  |   src/kernel/fs/vfs_*.c
+                       +------+------+
+                              |
+              +---------------+----------------+
+              |               |                |
+         +----+----+    +-----+-----+    +-----+-----+
+         |  ramfs  |    |   ext2    |    |   pipes   |
+         +---------+    +-----+-----+    +-----------+
+                             |
+                       +-----+-----+
+                       | block_dev |   src/kernel/drivers/block/
+                       +-----+-----+
+                             |
+                       +-----+-----+
+                       | virtio-blk|
+                       +-----------+
+```
+
+- `vfs_core.c` owns the open-file table + `vfs_lock`.
+- `vfs_fd.c` handles `open/close/read/write/dup/dup2`.
+- `vfs_path.c` handles path-based ops (`chmod/chown/mkdir/unlink/
+  rename`).
+- `dcache.c` caches resolved paths; invalidated on rename/unlink/mkdir.
+- `ext2.c` is read-only at boot; writes are journaled through
+  `journal.c` (CRC32-protected 2-slot ring; replay on next mount).
+- The Doom WAD round-trips host -> ext2 -> ramfs mirror -> Doom and
+  back; persistence is verified end-to-end via `debugfs` on the host.
+
+The on-disk ext2 structs are private to `src/kernel/fs/ext2_ondisk.h` --
+nothing outside `ext2.c` may include it.
+
+## 7. Block I/O
+
+PCI enumeration discovers a `1af4:1001` virtio device, the driver
+allocates the virtqueue, maps the device's MMIO BAR, and exposes
+`block_device_t` to the VFS via `src/kernel/drivers/block/block.c`.
+
+The ext2 driver holds **per-CPU** `block_buf` scratch buffers to avoid
+inter-CPU lock contention on read-paths.
+
+Volatile discipline: virtio rings, DMA descriptor tables, and the
+completion byte are accessed through `volatile` casts. Anything backed
+by a shared physical page or MMIO region must follow suit.
+
+## 8. Syscall dispatch
+
+```
+user: INT 0x80
+  -> src/kernel/irq/syscall_entry.S    save regs + per-CPU gs reload
+     -> syscall_handler(syscall_registers_t*)   src/kernel/syscalls/syscall_table.c
+        process_check_current_canary()
+        if (nr >= __NR_MAX+1 || !table[nr]) return -ENOSYS
+        this_cpu()->syscall_regs = regs
+        eax = table[nr](ebx, ecx, edx, esi, edi)
+        process_check_current_canary()
+```
+
+The handler table is `static` and built at compile time from
+`uapi/syscalls.h`. Five syscalls whose native prototype isn't
+`(u32 x5) -> i32` go through tiny shims in `syscall_table.c`
+(execve, pipe, getrlimit, setrlimit, nice) -- there is no
+function-pointer casting in the table itself.
+
+`sys_fork_wrap` is the one wrapper that needs the saved register frame;
+it reads `this_cpu()->syscall_regs` and forwards to `sys_fork` proper.
+
+## 9. SMP
+
+- ACPI MADT lists the LAPIC IDs; `src/kernel/init/smp_bringup.c` IPIs each
+  AP through the trampoline and waits for it to bump `cpus_online`.
+- Per-CPU state (`struct per_cpu`) is reached through `%gs`. The IRQ
+  entry stubs *read the LAPIC ID at every entry* to compute the GS
+  selector dynamically -- this is required because LAPIC IDs are not
+  contiguous (see `feedback_dynamic_gs_in_irq` for the bug that
+  motivated it).
+- TLB shootdown is broadcast via an IPI vector that flushes the full
+  TLB on the target CPUs. We don't yet do range-tracked shootdown.
+
+## 10. Userspace
+
+- The dynamic linker `src/userspace/ldso/rtld.c` loads PT_DYNAMIC,
+  resolves needed `DT_NEEDED` libs from `/lib`, runs relocations,
+  jumps to the executable entry.
+- libc is in `src/lib/libc/` -- a hand-written subset (string ops,
+  printf family, malloc, syscalls, time, math, ctype). ~250 symbols.
+- Init is `/bin/init`, which exec's `/bin/sh`.
+- The smoke suite is `/bin/test_runner`; 30 assertions, run on every
+  build.
+
+## 11. Build & test
+
+```
+make                          builds kernel.elf, os.img, initramfs.cpio
+make test                     boots os.img in QEMU (interactive)
+qemu-system-i386 -kernel build/bin/kernel.elf -smp 4 \
+    -nographic -serial mon:stdio
+```
+
+Smoke target = `5 x 30/30 PASS under -smp 4`. Both the integrated
+test_runner and the Doom boot path are part of the routine validation
+loop.
+
+## 12. Per-file headers
+
+Every `.c` file carries a 5-12 line English block comment at the top
+stating its single responsibility, its invariants, and the things it is
+*not allowed* to do. These are the authoritative micro-contracts;
+when modifying a file, read its header first.
